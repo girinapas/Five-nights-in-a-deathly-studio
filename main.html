@@ -226,6 +226,7 @@ const PATH_GRAPH = {
 let moveInterval = null;
 let timeInterval = null;
 let dumbTimer = null; 
+let angelTimer = null; // <--- НОВЫЙ ТАЙМЕР ДЛЯ АНГЕЛА
 const statusEl = document.getElementById("status");
 function setStatus(text) { statusEl.textContent = text; }
 
@@ -270,13 +271,11 @@ function renderMain() {
 function renderTablet() {
     if (!isTabletOpen) return;
 
-    // Если Кардиган в офисе — показываем офис (спец-условие)
     if (animatronics.cardigan.pos === "office") {
         drawTablet("./Офис_с_кардиганом.png");
         return;
     }
 
-    // Ищем первого аниматроника, который находится НА КАМЕРЕ (не в офисе)
     let activeCam = null;
     const camsToCheck = [
         animatronics.angel.pos, 
@@ -288,14 +287,12 @@ function renderTablet() {
     for (let pos of camsToCheck) {
         if (pos && pos !== "office" && pos !== "") {
             activeCam = pos;
-            break; // Нашли первого на камере — показываем его
+            break; 
         }
     }
 
-    // Если кто-то есть на камере — показываем её
     if (activeCam) {
         let base = activeCam;
-        // Проверка на купюру (Доллар)
         if (animatronics.dollar.pos === activeCam) {
             drawTablet("./" + base + "_с_купюрой.png");
         } else {
@@ -304,7 +301,6 @@ function renderTablet() {
         return;
     }
 
-    // Если никого нет на камерах (все либо пустые, либо в офисе) — показываем пустую камеру
     drawTablet("./classiccamera.png");
 }
 
@@ -319,6 +315,8 @@ document.addEventListener("keydown", function(e) {
     if (e.code === "KeyD") {
         currentView = "door";
         handleDollarTurnAway();
+        // Если игрок отвернулся от Ангела — очищаем таймер
+        if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; }
         renderMain();
         return;
     }
@@ -460,6 +458,7 @@ function gameOver(reason) {
     if (moveInterval) clearInterval(moveInterval);
     if (timeInterval) clearInterval(timeInterval);
     if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+    if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; } // Очистка таймера Ангела
     if (animatronics.dollar.attackTimer) {
         clearTimeout(animatronics.dollar.attackTimer);
         animatronics.dollar.attackTimer = null;
@@ -490,6 +489,7 @@ function startGame(startNight) {
     if (moveInterval) clearInterval(moveInterval);
     if (timeInterval) clearInterval(timeInterval);
     if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+    if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; }
     if (animatronics.dollar.attackTimer) {
         clearTimeout(animatronics.dollar.attackTimer);
         animatronics.dollar.attackTimer = null;
@@ -534,21 +534,35 @@ function startGame(startNight) {
         }
 
         // =========================================================
-        // ЛОГИКА АНГЕЛА
+        // ЛОГИКА АНГЕЛА (С ТАЙМЕРОМ)
         // =========================================================
-        // 1. Если Ангел в двери, а ты в офисе — он входит в офис
+        // 1. Если Ангел в двери, а ты в офисе — он входит
         if ((animatronics.angel.pos === "doorsee" || animatronics.angel.pos === "doornotsee") && currentView === "office") {
             animatronics.angel.pos = "office";
-            setStatus("Ангел пробрался в офис! НЕ СМОТРИ НА НЕГО!");
+            setStatus("Ангел пробрался в офис! СРОЧНО ОТВЕРНИСЬ!");
             renderMain();
         }
 
-        // 2. Если Ангел в офисе и ты СМОТРИШЬ на него (фонарик включен) — смерть
-        if (animatronics.angel.pos === "office" && currentView === "office" && flashlighton) {
-            gameOver("Ты посмотрел на Ангела!");
+        // 2. Если Ангел в офисе и ты смотришь в офис — запускаем таймер на смерть
+        if (animatronics.angel.pos === "office" && currentView === "office") {
+            if (!angelTimer) {
+                angelTimer = setTimeout(() => {
+                    // Если через 3 секунды ты всё еще в офисе и Ангел здесь — смерть
+                    if (nightstarted && currentView === "office" && animatronics.angel.pos === "office") {
+                        gameOver("Ты слишком долго смотрел на Ангела. Нужно было отвернуться!");
+                    }
+                    angelTimer = null;
+                }, 3000); // <--- 3000 мс = 3 секунды на реакцию
+            }
+        } else {
+            // Если ты отвернулся (ушел в дверь) или Ангела нет в офисе — таймер отменяется
+            if (angelTimer) {
+                clearTimeout(angelTimer);
+                angelTimer = null;
+            }
         }
 
-        // 3. Если Ангел в офисе, а ты ОТВЕРНУЛСЯ (ушел в дверь) — он уходит
+        // 3. Если Ангел в офисе, а ты ОТВЕРНУЛСЯ — он исчезает
         if (animatronics.angel.pos === "office" && currentView === "door") {
             animatronics.angel.pos = "stdio2";
             setStatus("Ты отвернулся, и Ангел исчез.");
@@ -597,6 +611,7 @@ function startGame(startNight) {
             clearInterval(moveInterval);
             clearInterval(timeInterval);
             if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+            if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; }
             if (animatronics.dollar.attackTimer) {
                 clearTimeout(animatronics.dollar.attackTimer);
                 animatronics.dollar.attackTimer = null;
