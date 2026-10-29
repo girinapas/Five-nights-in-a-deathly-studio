@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Пять ночей в смертоносной студии</title>
+<style>
+    html, body {
+        margin: 0; padding: 0;
+        width: 100%; height: 100%;
+        overflow: hidden;
+        background-color: #000;
+        font-family: monospace;
+        color: #ccc;
+        user-select: none;
+    }
+    #ui {
+        position: absolute;
+        top: 10px; left: 10px;
+        z-index: 10;
+        background: rgba(0,0,0,0.7);
+        padding: 10px;
+        border: 1px solid #333;
+    }
+    button {
+        background-color: #111;
+        color: #ccc;
+        height: 40px;
+        padding: 0 15px;
+        cursor: pointer;
+        border: 1px solid #333;
+        margin-right: 10px;
+        font-family: monospace;
+    }
+    button:hover { background-color: #333; }
+    #gamecanvas {
+        position: absolute;
+        top: 0; left: 0;
+        display: block;
+        z-index: 1;
+    }
+    #tablet {
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        display: none;
+        z-index: 5;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+        border: 2px solid #333;
+        background: #000;
+    }
+    #hint {
+        position: absolute;
+        bottom: 10px; left: 10px;
+        z-index: 10;
+        font-size: 14px;
+        color: #888;
+        background: rgba(0,0,0,0.7);
+        padding: 5px 10px;
+    }
+    #clock {
+        position: absolute;
+        top: 10px; right: 10px;
+        z-index: 10;
+        background: rgba(0,0,0,0.7);
+        padding: 10px 20px;
+        border: 1px solid #333;
+        font-size: 28px;
+        color: #ddd;
+        display: none;
+    }
+</style>
+</head>
+<body>
+    <div id="ui">
+        <button id="newgame">Новая игра</button>
+        <button id="continuebtn" style="display:none;">Продолжить</button>
+        <span id="status">Нажми "Новая игра"</span>
+    </div>
+    <div id="clock">12</div>
+    <canvas id="gamecanvas"></canvas>
+    <canvas id="tablet"></canvas>
+    <div id="hint">D — Дверь | A — Назад в офис | SPACE — Фонарик | F — Датчики света</div>
+
+<script>
+const canvas = document.getElementById("gamecanvas");
+const ctx = canvas.getContext("2d");
+const tabletCanvas = document.getElementById("tablet");
+const tabletCtx = tabletCanvas.getContext("2d");
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+const imageCache = {};
+function drawImageOnCtx(context, targetCanvas, src, onDone) {
+    if (imageCache[src] && imageCache[src].complete) {
+        context.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        context.drawImage(imageCache[src], 0, 0, targetCanvas.width, targetCanvas.height);
+        if (onDone) onDone(imageCache[src]);
+        return;
+    }
+    const img = new Image();
+    img.onload = function() {
+        imageCache[src] = img;
+        context.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        context.drawImage(img, 0, 0, targetCanvas.width, targetCanvas.height);
+        if (onDone) onDone(img);
+    };
+    img.onerror = function() {
+        context.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        context.fillStyle = "#000";
+        context.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+        context.fillStyle = "#f00";
+        context.font = "20px monospace";
+        context.fillText("НЕТ ФАЙЛА: " + src, 40, 40);
+    };
+    img.src = src;
+}
+
+function drawMain(src, onDone) { drawImageOnCtx(ctx, canvas, src, onDone); }
+function drawTablet(src, onDone) {
+    drawImageOnCtx(tabletCtx, tabletCanvas, src, function(img) {
+        tabletCanvas.width = img.width;
+        tabletCanvas.height = img.height;
+        tabletCtx.clearRect(0, 0, tabletCanvas.width, tabletCanvas.height);
+        tabletCtx.drawImage(img, 0, 0, img.width, img.height);
+        if (onDone) onDone();
+    });
+}
+
+// =============================================================
+//  ЭЛЕМЕНТЫ UI
+// =============================================================
+const uiEl = document.getElementById("ui");
+const hintEl = document.getElementById("hint");
+const clockEl = document.getElementById("clock");
+
+function showUI() {
+    uiEl.style.display = "block";
+    hintEl.style.display = "block";
+    clockEl.style.display = "none";
+}
+
+function hideUI() {
+    uiEl.style.display = "none";
+    hintEl.style.display = "none";
+    clockEl.style.display = "block";
+}
+
+function setClockFromHour(hour) {
+    let display;
+    if (hour === 0) display = "12";
+    else if (hour >= 6) display = "6";
+    else display = String(hour);
+    clockEl.textContent = display;
+}
+
+// =============================================================
+//  СОХРАНЕНИЕ ПРОГРЕССА
+// =============================================================
+const SAVE_KEY = "fnaf_night_progress";
+const continueBtn = document.getElementById("continuebtn");
+
+function loadProgress() {
+    try {
+        const v = localStorage.getItem(SAVE_KEY);
+        const n = parseInt(v, 10);
+        return (isNaN(n) || n < 1) ? 1 : n;
+    } catch (e) {
+        return 1;
+    }
+}
+
+function saveProgress(n) {
+    try { localStorage.setItem(SAVE_KEY, String(n)); } catch (e) {}
+}
+
+function clearProgress() {
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+}
+
+function updateContinueButton() {
+    const saved = loadProgress();
+    if (saved > 1) {
+        continueBtn.style.display = "inline-block";
+        continueBtn.textContent = "Продолжить (Ночь " + saved + ")";
+    } else {
+        continueBtn.style.display = "none";
+    }
+}
+
+// =============================================================
+//  СОСТОЯНИЕ ИГРЫ
+// =============================================================
+let night = 1;
+let time = 0;
+let nightstarted = false;
+let flashlighton = false;
+let flickerCount = 0;
+
+let currentView = "office";
+let isTabletOpen = false;
+
+const animatronics = {
+    angel:    { pos: "", active: false },
+    smile:    { pos: "", active: false },
+    dollar:   { pos: "", active: false, attackTimer: null },
+    dumb:     { pos: "", active: false },
+    cardigan: { pos: "", active: false, seen: false }
+};
+
+const PATH_GRAPH = {
+    "":            ["beginstdio2"],
+    "beginstdio2": ["stdio1"], 
+    "stdio1":      ["stdio2"], 
+    "stdio2":      ["doorsee", "lessee", "doornotsee"], 
+    "lessee":      ["doorsee", "doornotsee"],
+    "doorsee":     ["office"], 
+    "doornotsee":  ["office"]  
+};
+
+let moveInterval = null;
+let timeInterval = null;
+let dumbTimer = null; 
+const statusEl = document.getElementById("status");
+function setStatus(text) { statusEl.textContent = text; }
+
+// =============================================================
+//  ОТРИСОВКА
+// =============================================================
+function renderMain() {
+    if (!nightstarted) return;
+
+    const inOffice = Object.values(animatronics).find(a => a.pos === "office");
+
+    if (currentView === "office") {
+        if (inOffice === animatronics.cardigan) {
+            drawMain("./Офис_с_кардиганом.png");
+        } else if (animatronics.dollar.pos === "office") {
+            drawMain("./Офис_с_купюрой.png");
+        } else if (flashlighton) {
+            if (animatronics.smile.pos === "office") {
+                drawMain("./Офис_со_смайлом_и_включённым_фонариком.png");
+            } else if (animatronics.angel.pos === "office") {
+                drawMain("./Офис_со_ангелом_и_включённым_фонариком.png");
+            } else {
+                drawMain("./Офис_с_включённым_фонариком.png");
+            }
+        } else {
+            drawMain("./Офис.png");
+        }
+    }
+    else if (currentView === "door") {
+        if (animatronics.dumb.pos === "doorsee" || animatronics.dumb.pos === "doornotsee" || animatronics.dumb.pos === "lessee") {
+            drawMain("./Дверь_с_лишней_тумбой.png");
+        } 
+        else if (flashlighton && (animatronics.angel.pos === "doorsee" || animatronics.angel.pos === "doornotsee")) {
+            drawMain("./Дверь_с_ангелом.png");
+        } 
+        else {
+            drawMain("./Дверь.png");
+        }
+    }
+}
+
+function renderTablet() {
+    if (!isTabletOpen) return;
+
+    // Если Кардиган в офисе — показываем офис (спец-условие)
+    if (animatronics.cardigan.pos === "office") {
+        drawTablet("./Офис_с_кардиганом.png");
+        return;
+    }
+
+    // Ищем первого аниматроника, который находится НА КАМЕРЕ (не в офисе)
+    let activeCam = null;
+    const camsToCheck = [
+        animatronics.angel.pos, 
+        animatronics.smile.pos, 
+        animatronics.dumb.pos, 
+        animatronics.dollar.pos
+    ];
+
+    for (let pos of camsToCheck) {
+        if (pos && pos !== "office" && pos !== "") {
+            activeCam = pos;
+            break; // Нашли первого на камере — показываем его
+        }
+    }
+
+    // Если кто-то есть на камере — показываем её
+    if (activeCam) {
+        let base = activeCam;
+        // Проверка на купюру (Доллар)
+        if (animatronics.dollar.pos === activeCam) {
+            drawTablet("./" + base + "_с_купюрой.png");
+        } else {
+            drawTablet("./" + base + ".png");
+        }
+        return;
+    }
+
+    // Если никого нет на камерах (все либо пустые, либо в офисе) — показываем пустую камеру
+    drawTablet("./classiccamera.png");
+}
+
+// =============================================================
+//  УПРАВЛЕНИЕ
+// =============================================================
+document.addEventListener("keydown", function(e) {
+    if (!nightstarted) return;
+
+    if (isTabletOpen && e.code !== "KeyF") return;
+
+    if (e.code === "KeyD") {
+        currentView = "door";
+        handleDollarTurnAway();
+        renderMain();
+        return;
+    }
+
+    if (e.code === "KeyA" && currentView === "door") {
+        currentView = "office";
+        if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+        renderMain();
+        return;
+    }
+
+    if (e.code === "KeyF") {
+        if (isTabletOpen) {
+            if (animatronics.cardigan.pos === "office" || animatronics.cardigan.seen) {
+                gameOver("Ты опустил планшет, а Кардиган был здесь.");
+            }
+            isTabletOpen = false;
+            tabletCanvas.style.display = "none";
+            tabletCtx.clearRect(0, 0, tabletCanvas.width, tabletCanvas.height);
+        } else {
+            isTabletOpen = true;
+            tabletCanvas.style.display = "block";
+            renderTablet();
+
+            if (!animatronics.cardigan.seen && Math.random() < 0.005) {
+                animatronics.cardigan.seen = true;
+                animatronics.cardigan.pos = "office";
+                setStatus("Ты видишь его... НЕ ОПУСКАЙ ПЛАНШЕТ!");
+                renderTablet();
+            }
+        }
+        return;
+    }
+
+    if (e.code === "Space") {
+        if (isTabletOpen) return;
+        flashlighton = true;
+        flickerCount++;
+
+        if (currentView === "office" && animatronics.smile.pos === "office") {
+            if (flickerCount >= 3) {
+                animatronics.smile.pos = "beginstdio2";
+                flickerCount = 0;
+                setStatus("Смайл отогнан фонариком!");
+            }
+        }
+        renderMain();
+    }
+});
+
+document.addEventListener("keyup", function(e) {
+    if (!nightstarted) return;
+
+    if (e.code === "Space") {
+        flashlighton = false;
+        if (currentView === "office" || currentView === "door") renderMain();
+    }
+
+    if (e.code === "KeyF" || e.code === "KeyD" || e.code === "KeyA") {
+        flickerCount = 0;
+    }
+});
+
+// =============================================================
+//  ЛОГИКА ДВИЖЕНИЯ
+// =============================================================
+function moveAnimatronic(name) {
+    const anim = animatronics[name];
+    if (anim.pos === "office") return;
+
+    if (name === "dollar") {
+        moveDollar();
+        return;
+    }
+
+    const current = anim.pos || "";
+    const nextSteps = PATH_GRAPH[current] || ["beginstdio2"];
+    anim.pos = nextSteps[Math.floor(Math.random() * nextSteps.length)];
+
+    if (anim.pos === "office") {
+        if (name === "cardigan") {
+            setStatus("КАРДИГАН В ОФИСЕ! НЕ ОПУСКАЙ ПЛАНШЕТ!");
+        }
+    }
+}
+
+function moveDollar() {
+    const dollar = animatronics.dollar;
+    if (dollar.pos === "office") return;
+
+    if (isTabletOpen && dollar.pos !== "") {
+        const anyPos = animatronics.angel.pos || animatronics.smile.pos || animatronics.dumb.pos || animatronics.dollar.pos;
+        const shownPos = (animatronics.cardigan.pos === "office") ? "office" : (anyPos || "classiccamera");
+        if (shownPos === dollar.pos) {
+            return;
+        }
+    }
+
+    const jumpChance = 0.10 + night * 0.03;
+    if (Math.random() < jumpChance) {
+        dollar.pos = "office";
+        setStatus("Доллар в офисе! Отвернись!");
+        renderMain();
+
+        if (dollar.attackTimer) clearTimeout(dollar.attackTimer);
+        dollar.attackTimer = setTimeout(() => {
+            if (!nightstarted) return;
+            if (dollar.pos === "office" && currentView === "office") {
+                gameOver("Ты слишком долго смотрел на купюру.");
+            } else if (dollar.pos === "office" && currentView !== "office") {
+                dollar.pos = "";
+                setStatus("Ты отвернулся — купюра исчезла.");
+                renderMain();
+            }
+        }, Math.round(4000 / night));
+        return;
+    }
+
+    const cams = ["beginstdio2", "stdio1", "stdio2", "doorsee", "doornotsee", "lessee"];
+    dollar.pos = cams[Math.floor(Math.random() * cams.length)];
+}
+
+function handleDollarTurnAway() {
+    const dollar = animatronics.dollar;
+    if (dollar.pos === "office" && currentView === "door") {
+        dollar.pos = "";
+        if (dollar.attackTimer) {
+            clearTimeout(dollar.attackTimer);
+            dollar.attackTimer = null;
+        }
+        setStatus("Ты отвернулся — купюра исчезла.");
+    }
+}
+
+function gameOver(reason) {
+    nightstarted = false;
+    isTabletOpen = false;
+    tabletCanvas.style.display = "none";
+    if (moveInterval) clearInterval(moveInterval);
+    if (timeInterval) clearInterval(timeInterval);
+    if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+    if (animatronics.dollar.attackTimer) {
+        clearTimeout(animatronics.dollar.attackTimer);
+        animatronics.dollar.attackTimer = null;
+    }
+    setStatus("ИГРА ОКОНЧЕНА: " + reason);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#f00";
+    ctx.font = "30px monospace";
+    ctx.fillText("GAME OVER", canvas.width / 2 - 80, canvas.height / 2);
+    showUI();
+    updateContinueButton();
+}
+
+// =============================================================
+//  ИГРОВОЙ ЦИКЛ
+// =============================================================
+function startGame(startNight) {
+    night = startNight;
+    time = 0;
+    nightstarted = true;
+    currentView = "office";
+    isTabletOpen = false;
+    tabletCanvas.style.display = "none";
+    flashlighton = false;
+    flickerCount = 0;
+    if (moveInterval) clearInterval(moveInterval);
+    if (timeInterval) clearInterval(timeInterval);
+    if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+    if (animatronics.dollar.attackTimer) {
+        clearTimeout(animatronics.dollar.attackTimer);
+        animatronics.dollar.attackTimer = null;
+    }
+
+    for (let key in animatronics) {
+        animatronics[key].pos = "";
+        if (key === 'cardigan') animatronics[key].seen = false;
+    }
+
+    if (night >= 2) {
+        if (Math.random() < 0.5) animatronics.angel.pos = "stdio1";
+        if (Math.random() < 0.5) animatronics.smile.pos = "stdio2";
+    }
+
+    setClockFromHour(0);
+    
+    if (night >= 2) {
+        hideUI();
+    } else {
+        clockEl.style.display = "block";
+    }
+    
+    setStatus("Ночь " + night + " — 00:00");
+    renderMain();
+
+    moveInterval = setInterval(() => {
+        if (!nightstarted) return;
+
+        for (let key in animatronics) {
+            if (key === 'cardigan') continue;
+            if (animatronics[key].pos === "office") continue;
+
+            let chance = 0.15 + (night * 0.05);
+            if (key === "angel" || key === "smile") {
+                chance += 0.25; 
+            }
+
+            if (Math.random() < chance) {
+                moveAnimatronic(key);
+            }
+        }
+
+        // =========================================================
+        // ЛОГИКА АНГЕЛА
+        // =========================================================
+        // 1. Если Ангел в двери, а ты в офисе — он входит в офис
+        if ((animatronics.angel.pos === "doorsee" || animatronics.angel.pos === "doornotsee") && currentView === "office") {
+            animatronics.angel.pos = "office";
+            setStatus("Ангел пробрался в офис! НЕ СМОТРИ НА НЕГО!");
+            renderMain();
+        }
+
+        // 2. Если Ангел в офисе и ты СМОТРИШЬ на него (фонарик включен) — смерть
+        if (animatronics.angel.pos === "office" && currentView === "office" && flashlighton) {
+            gameOver("Ты посмотрел на Ангела!");
+        }
+
+        // 3. Если Ангел в офисе, а ты ОТВЕРНУЛСЯ (ушел в дверь) — он уходит
+        if (animatronics.angel.pos === "office" && currentView === "door") {
+            animatronics.angel.pos = "stdio2";
+            setStatus("Ты отвернулся, и Ангел исчез.");
+            renderMain();
+        }
+
+        // =========================================================
+        // ПРОВЕРКА СТОЛИКА (у двери)
+        // =========================================================
+        if ((animatronics.dumb.pos === "doorsee" || animatronics.dumb.pos === "doornotsee") && currentView === "door") {
+            if (!dumbTimer) {
+                dumbTimer = setTimeout(() => {
+                    if (nightstarted && currentView === "door" && (animatronics.dumb.pos === "doorsee" || animatronics.dumb.pos === "doornotsee")) {
+                        gameOver("Ты слишком долго смотрел на Столика!");
+                    }
+                    dumbTimer = null;
+                }, 2000);
+            }
+        } else {
+            if (dumbTimer) {
+                clearTimeout(dumbTimer);
+                dumbTimer = null;
+            }
+        }
+
+        if (animatronics.cardigan.pos === "office" && !isTabletOpen) {
+            gameOver("Ты опустил планшет, а Кардиган был здесь.");
+        }
+
+        if (isTabletOpen) {
+            renderTablet();
+        } else if (currentView === "door" || (currentView === "office" && Object.values(animatronics).some(a => a.pos === "office"))) {
+            renderMain();
+        }
+
+    }, 3000);
+
+    timeInterval = setInterval(() => {
+        if (!nightstarted) return;
+        time++;
+        setClockFromHour(time);
+        setStatus("Ночь " + night + " — " + time + ":00");
+
+        if (time >= 6) {
+            nightstarted = false;
+            clearInterval(moveInterval);
+            clearInterval(timeInterval);
+            if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
+            if (animatronics.dollar.attackTimer) {
+                clearTimeout(animatronics.dollar.attackTimer);
+                animatronics.dollar.attackTimer = null;
+            }
+            night++;
+            isTabletOpen = false;
+            tabletCanvas.style.display = "none";
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#0f0";
+            ctx.font = "30px monospace";
+            ctx.fillText("6 AM! Ты выжил!", canvas.width / 2 - 100, canvas.height / 2);
+
+            saveProgress(night);
+            showUI();
+            updateContinueButton();
+
+            setStatus("6 AM! Ты выжил! Следующая ночь: " + night);
+        }
+    }, 30000);
+}
+
+document.getElementById("newgame").onclick = function() {
+    clearProgress();
+    updateContinueButton();
+    startGame(1);
+};
+
+continueBtn.onclick = function() {
+    const saved = loadProgress();
+    startGame(saved);
+};
+
+// Инициализация при загрузке страницы
+updateContinueButton();
+</script>
+</body>
+</html>
