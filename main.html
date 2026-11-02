@@ -624,7 +624,7 @@ function startGame(startNight) {
 
     timeInterval = setInterval(() => {
         if (!nightstarted) return;
-        time+=5;
+        time++;
         setClockFromHour(time);
         setStatus("Ночь " + night + " — " + time + ":00");
 
