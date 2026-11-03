@@ -69,6 +69,37 @@
         color: #ddd;
         display: none;
     }
+    /* ===== БАТАРЕЙКА ===== */
+    #battery {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 10;
+        display: none;
+        background: rgba(0,0,0,0.7);
+        padding: 6px 12px;
+        border: 1px solid #333;
+        align-items: center;
+        gap: 8px;
+    }
+    #battery svg {
+        display: block;
+    }
+    #battery .battery-fill {
+        transition: width 0.2s linear, fill 0.2s linear;
+    }
+    #battery .battery-label {
+        font-size: 14px;
+        color: #aaa;
+        min-width: 36px;
+        text-align: right;
+    }
+    #battery.low .battery-label {
+        color: #f55;
+    }
+    #battery.dead {
+        opacity: 0.5;
+    }
 </style>
 </head>
 <body>
@@ -78,6 +109,22 @@
         <span id="status">Нажми "Новая игра"</span>
     </div>
     <div id="clock">12</div>
+
+    <!-- ===== ИНДИКАТОР БАТАРЕЙКИ ===== -->
+    <div id="battery">
+        <svg width="52" height="24" viewBox="0 0 52 24" xmlns="http://www.w3.org/2000/svg">
+            <!-- Корпус батарейки -->
+            <rect x="1" y="2" width="44" height="20" rx="3" ry="3"
+                  fill="none" stroke="#bbb" stroke-width="2"/>
+            <!-- Контакт -->
+            <rect x="47" y="7" width="4" height="10" rx="1" ry="1" fill="#bbb"/>
+            <!-- Заливка (заряд) -->
+            <rect id="batteryFill" class="battery-fill" x="4" y="5" width="38" height="14"
+                  rx="1" ry="1" fill="#3c3"/>
+        </svg>
+        <span id="batteryLabel" class="battery-label">100%</span>
+    </div>
+
     <canvas id="gamecanvas"></canvas>
     <canvas id="tablet"></canvas>
     <div id="hint">D — Дверь | A — Назад в офис | SPACE — Фонарик | F — Датчики света</div>
@@ -142,17 +189,22 @@ function drawTablet(src, onDone) {
 const uiEl = document.getElementById("ui");
 const hintEl = document.getElementById("hint");
 const clockEl = document.getElementById("clock");
+const batteryEl = document.getElementById("battery");
+const batteryFill = document.getElementById("batteryFill");
+const batteryLabel = document.getElementById("batteryLabel");
 
 function showUI() {
     uiEl.style.display = "block";
     hintEl.style.display = "block";
     clockEl.style.display = "none";
+    batteryEl.style.display = "none";
 }
 
 function hideUI() {
     uiEl.style.display = "none";
     hintEl.style.display = "none";
     clockEl.style.display = "block";
+    batteryEl.style.display = "flex";
 }
 
 function setClockFromHour(hour) {
@@ -161,6 +213,76 @@ function setClockFromHour(hour) {
     else if (hour >= 6) display = "6";
     else display = String(hour);
     clockEl.textContent = display;
+}
+
+// =============================================================
+//  БАТАРЕЙКА ФОНАРИКА
+// =============================================================
+const BATTERY_MAX = 100;
+let batteryLevel = BATTERY_MAX;    // текущий заряд (0..100)
+let batteryDead = false;           // фонарик окончательно сел
+let batteryInterval = null;
+
+// Скорость разрядки: % в секунду при включённом фонарике
+const DRAIN_RATE_PER_SEC = 4; // ~25 секунд непрерывного света
+
+function updateBatteryUI() {
+    const pct = Math.max(0, Math.min(BATTERY_MAX, batteryLevel));
+    const fullWidth = 38; // ширина заливки в px (совпадает с viewBox)
+    const w = (pct / BATTERY_MAX) * fullWidth;
+    batteryFill.setAttribute("width", w.toFixed(1));
+
+    // Цвет: зелёный -> жёлтый -> красный
+    let color;
+    if (pct > 50) color = "#3c3";
+    else if (pct > 20) color = "#cc3";
+    else color = "#c33";
+    batteryFill.setAttribute("fill", color);
+
+    batteryLabel.textContent = Math.round(pct) + "%";
+
+    if (pct <= 20) batteryEl.classList.add("low");
+    else batteryEl.classList.remove("low");
+
+    if (batteryDead) batteryEl.classList.add("dead");
+    else batteryEl.classList.remove("dead");
+}
+
+function resetBattery() {
+    batteryLevel = BATTERY_MAX;
+    batteryDead = false;
+    if (batteryInterval) { clearInterval(batteryInterval); batteryInterval = null; }
+    updateBatteryUI();
+}
+
+function startBatteryLoop() {
+    if (batteryInterval) clearInterval(batteryInterval);
+    let last = performance.now();
+
+    batteryInterval = setInterval(() => {
+        const now = performance.now();
+        const dt = (now - last) / 1000;
+        last = now;
+
+        if (!nightstarted) return;
+        if (batteryDead) return;
+
+        // Разрядка ТОЛЬКО когда фонарик включён
+        if (flashlighton) {
+            batteryLevel -= DRAIN_RATE_PER_SEC * dt;
+
+            if (batteryLevel <= 0) {
+                batteryLevel = 0;
+                batteryDead = true;
+                flashlighton = false;           // принудительно выключаем
+                flickerCount = 0;
+                setStatus("Фонарик разрядился! Батарейка мертва.");
+                if (currentView === "office" || currentView === "door") renderMain();
+            }
+
+            updateBatteryUI();
+        }
+    }, 100); // обновляем 10 раз в секунду — плавно и точно
 }
 
 // =============================================================
@@ -246,7 +368,7 @@ const PATH_GRAPH = {
 let moveInterval = null;
 let timeInterval = null;
 let dumbTimer = null; 
-let angelTimer = null; // <--- НОВЫЙ ТАЙМЕР ДЛЯ АНГЕЛА
+let angelTimer = null;
 const statusEl = document.getElementById("status");
 function setStatus(text) { statusEl.textContent = text; }
 
@@ -335,7 +457,6 @@ document.addEventListener("keydown", function(e) {
     if (e.code === "KeyD") {
         currentView = "door";
         handleDollarTurnAway();
-        // Если игрок отвернулся от Ангела — очищаем таймер
         if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; }
         renderMain();
         return;
@@ -373,6 +494,13 @@ document.addEventListener("keydown", function(e) {
 
     if (e.code === "Space") {
         if (isTabletOpen) return;
+
+        // Если батарейка мертва — фонарик больше не включается
+        if (batteryDead) {
+            setStatus("Фонарик не работает — батарейка села.");
+            return;
+        }
+
         flashlighton = true;
         flickerCount++;
 
@@ -476,10 +604,12 @@ function gameOver(reason) {
     nightstarted = false;
     isTabletOpen = false;
     tabletCanvas.style.display = "none";
+    flashlighton = false;
     if (moveInterval) clearInterval(moveInterval);
     if (timeInterval) clearInterval(timeInterval);
+    if (batteryInterval) { clearInterval(batteryInterval); batteryInterval = null; }
     if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
-    if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; } // Очистка таймера Ангела
+    if (angelTimer) { clearTimeout(angelTimer); angelTimer = null; }
     if (animatronics.dollar.attackTimer) {
         clearTimeout(animatronics.dollar.attackTimer);
         animatronics.dollar.attackTimer = null;
@@ -516,6 +646,10 @@ function startGame(startNight) {
         animatronics.dollar.attackTimer = null;
     }
 
+    // Перезапуск батарейки — на новую ночь полная
+    resetBattery();
+    startBatteryLoop();
+
     for (let key in animatronics) {
         animatronics[key].pos = "";
         if (key === 'cardigan') animatronics[key].seen = false;
@@ -533,6 +667,7 @@ function startGame(startNight) {
         hideUI();
     } else {
         clockEl.style.display = "block";
+        hideUI(); // всё равно показываем батарейку
     }
     
     setStatus("Ночь " + night + " — 00:00");
@@ -558,33 +693,28 @@ function startGame(startNight) {
         // =========================================================
         // ЛОГИКА АНГЕЛА (С ТАЙМЕРОМ)
         // =========================================================
-        // 1. Если Ангел в двери, а ты в офисе — он входит
         if ((animatronics.angel.pos === "doorsee" || animatronics.angel.pos === "doornotsee") && currentView === "office") {
             animatronics.angel.pos = "office";
             setStatus("Ангел пробрался в офис! СРОЧНО ОТВЕРНИСЬ!");
             renderMain();
         }
 
-        // 2. Если Ангел в офисе и ты смотришь в офис — запускаем таймер на смерть
         if (animatronics.angel.pos === "office" && currentView === "office") {
             if (!angelTimer) {
                 angelTimer = setTimeout(() => {
-                    // Если через 3 секунды ты всё еще в офисе и Ангел здесь — смерть
                     if (nightstarted && currentView === "office" && animatronics.angel.pos === "office") {
                         gameOver("Ты слишком долго смотрел на Ангела. Нужно было отвернуться!");
                     }
                     angelTimer = null;
-                }, 3000); // <--- 3000 мс = 3 секунды на реакцию
+                }, 3000);
             }
         } else {
-            // Если ты отвернулся (ушел в дверь) или Ангела нет в офисе — таймер отменяется
             if (angelTimer) {
                 clearTimeout(angelTimer);
                 angelTimer = null;
             }
         }
 
-        // 3. Если Ангел в офисе, а ты ОТВЕРНУЛСЯ — он исчезает
         if (animatronics.angel.pos === "office" && currentView === "door") {
             animatronics.angel.pos = "stdio2";
             setStatus("Ты отвернулся, и Ангел исчез.");
@@ -632,6 +762,7 @@ function startGame(startNight) {
             nightstarted = false;
             clearInterval(moveInterval);
             clearInterval(timeInterval);
+            if (batteryInterval) { clearInterval(batteryInterval); batteryInterval = null; }
             stopMusic();
             new Audio('./Night_end.m4a').play();
             if (dumbTimer) { clearTimeout(dumbTimer); dumbTimer = null; }
@@ -672,6 +803,7 @@ continueBtn.onclick = function() {
 
 // Инициализация при загрузке страницы
 updateContinueButton();
+updateBatteryUI();
 </script>
 </body>
 </html>
